@@ -1,0 +1,91 @@
+#!/usr/bin/env python3
+"""简芯HTTP守护 双服务启动器
+启动主服务和备用服务，读同一份文件目录。
+用法: python 简芯HTTP守护_双服务.py [--主端口 8500] [--备端口 8501]
+"""
+import sys, os, subprocess, time, signal
+
+# 配置
+工作区 = os.path.dirname(os.path.abspath(__file__))
+主端口 = 8500
+备端口 = 8501
+
+# 解析参数
+if '--主端口' in sys.argv:
+    主端口 = int(sys.argv[sys.argv.index('--主端口') + 1])
+if '--备端口' in sys.argv:
+    备端口 = int(sys.argv[sys.argv.index('--备端口') + 1])
+
+print(f'[简芯] 启动双服务: 主={主端口}  备={备端口}')
+
+# 1. 查找并杀掉旧进程
+def 杀端口(p):
+    if sys.platform == 'win32':
+        cmd = f'netstat -ano | findstr :{p}'
+        r = subprocess.run(cmd, shell=True, capture_output=True, text=True)
+        lines = r.stdout.strip().split('\n')
+        for ln in lines:
+            parts = ln.strip().split()
+            if len(parts) >= 5 and 'LISTENING' in ln:
+                pid = parts[-1]
+                if pid.isdigit():
+                    try:
+                        os.kill(int(pid), signal.SIGTERM)
+                        print(f'  已杀 PID {pid} (端口 {p})')
+                    except:
+                        pass
+    else:
+        cmd = f'fuser -k {p}/tcp 2>/dev/null || true'
+        subprocess.run(cmd, shell=True)
+
+杀端口(主端口)
+杀端口(备端口)
+time.sleep(1)
+
+# 2. 启动主服务
+脚本 = os.path.join(工作区, '简芯HTTP守护.py')
+主cmd = [sys.executable, '-X', 'utf8', 脚本, '--port', str(主端口)]
+主进程 = subprocess.Popen(
+    主cmd,
+    stdout=subprocess.PIPE,
+    stderr=subprocess.STDOUT,
+    cwd=工作区
+)
+print(f'  主服务 PID={主进程.pid}')
+
+# 3. 启动备用服务（等1秒避免同时加载冲突）
+time.sleep(1)
+备cmd = [sys.executable, '-X', 'utf8', 脚本, '--port', str(备端口)]
+备进程 = subprocess.Popen(
+    备cmd,
+    stdout=subprocess.PIPE,
+    stderr=subprocess.STDOUT,
+    cwd=工作区
+)
+print(f'  备用服务 PID={备进程.pid}')
+
+time.sleep(1)
+
+# 4. 验证
+import urllib.request, json
+for name, port in [('主', 主端口), ('备用', 备端口)]:
+    try:
+        resp = urllib.request.urlopen(f'http://localhost:{port}/status', timeout=3)
+        data = json.loads(resp.read())
+        print(f'  {name} http://localhost:{port}/status → 已就绪')
+    except Exception as e:
+        print(f'  {name} http://localhost:{port}/status → ❌ {e}')
+
+print(f'\n[简芯] 双服务已启动')
+print(f'  主:   http://localhost:{主端口}')
+print(f'  备用: http://localhost:{备端口}')
+print(f'\n按 Ctrl+C 终止...')
+
+try:
+    while True:
+        time.sleep(1)
+except KeyboardInterrupt:
+    print('\n[简芯] 关闭服务...')
+    主进程.terminate()
+    备进程.terminate()
+    print('  已关闭')
