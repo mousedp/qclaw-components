@@ -1,0 +1,238 @@
+
+
+
+
+import os
+
+from zst_透明层 import zst_pickle_load, zst_pickle_dump
+
+import pickle
+
+import hashlib
+
+import time
+
+
+
+class 锚点记忆:
+
+
+
+    def __init__(self, 工作目录=None):
+
+        if 工作目录 is None:
+
+            工作目录 = os.path.join(os.path.dirname(__file__), '中枢数据')
+
+        self.持久化文件 = os.path.join(工作目录, '锚点记忆.pkl')
+
+        self.数据 = {}
+
+        self._计数器 = 0
+
+        self._加载()
+
+
+
+    def 钉(self, 文本, 标题='', 标签=None):
+
+
+
+        内容锚 = hashlib.sha256(文本.encode('utf-8')).hexdigest()[:12]
+
+        锚点 = 内容锚
+
+
+
+        if 锚点 in self.数据:
+
+            self.数据[锚点]['时间'] = time.time()
+
+            self.数据[锚点]['访问'] = self.数据[锚点].get('访问', 0) + 1
+
+            self._保存()
+
+            return 锚点
+
+
+
+        self.数据[锚点] = {
+
+            '文本': 文本,
+
+            '标题': 标题 or '',
+
+            '标签': str(标签 or ''),
+
+            '时间': time.time(),
+
+            '访问': 1,
+
+        }
+
+        self._计数器 += 1
+
+        self._保存()
+
+        return 锚点
+
+
+
+    def 拔(self, 锚点):
+
+
+
+        条目 = self.数据.get(锚点)
+
+        if 条目:
+
+            条目['访问'] = 条目.get('访问', 0) + 1
+
+            self._保存()
+
+            return {
+
+                '锚点': 锚点,
+
+                '文本': 条目['文本'],
+
+                '标题': 条目.get('标题', ''),
+
+                '标签': 条目.get('标签', ''),
+
+                '时间': 条目.get('时间', 0),
+
+            }
+
+        return None
+
+
+
+    def 搜(self, 查询, 数量=5):
+
+
+
+        查询词 = set(查询.lower().split())
+
+        得分 = []
+
+        for 锚点, 条目 in self.数据.items():
+
+            文本 = 条目.get('文本', '')
+
+
+
+            匹配数 = sum(1 for 词 in 查询词 if 词 in 文本.lower())
+
+            if 匹配数 > 0:
+
+                得分.append((匹配数 / max(len(查询词), 1), 锚点, 条目))
+
+
+
+        得分.sort(key=lambda x: x[0], reverse=True)
+
+        return [{
+
+            '锚点': 锚点,
+
+            '文本': 条目['文本'][:100],
+
+            '相似度': round(分, 4),
+
+            '标题': 条目.get('标题', ''),
+
+        } for 分, 锚点, 条目 in 得分[:数量] if 分 > 0]
+
+
+
+    def 状态(self):
+
+        return {'条数': len(self.数据), '文件': self.持久化文件}
+
+
+
+    def _保存(self):
+
+        with open(self.持久化文件, 'wb') as f:
+
+            zst_pickle_dump({'数据': self.数据, '计数器': self._计数器}, self.持久化文件)
+
+
+
+    def _加载(self):
+
+        if os.path.exists(self.持久化文件):
+
+            try:
+
+                with open(self.持久化文件, 'rb') as f:
+
+                    d = zst_pickle_load(self.持久化文件)
+
+                self.数据 = d.get('数据', {})
+
+                self._计数器 = d.get('计数器', 0)
+
+            except:
+
+                pass
+
+
+
+    def 条数(self):
+
+        return len(self.数据)
+
+
+
+if __name__ == '__main__':
+
+    print('=== 锚点记忆 v1 自测 ===')
+
+    am = 锚点记忆()
+
+
+
+    a1 = am.钉('天翼云服务器IP是101.227.49.22，密码已存云端文档', '天翼云')
+
+    a2 = am.钉('简芯神经网络跑在8500端口，已学1023条', '简芯')
+
+    a3 = am.钉('有道云笔记CLI在workspace/bin目录', '有道云')
+
+    print('钉入3条:')
+
+    print('  锚点1:', a1)
+
+    print('  锚点2:', a2)
+
+    print('  锚点3:', a3)
+
+
+
+    a1b = am.钉('天翼云服务器IP是101.227.49.22，密码已存云端文档', '天翼云')
+
+    print('去重测试: %s == %s -> %s' % (a1, a1b, a1 == a1b))
+
+
+
+    条目 = am.拔(a1)
+
+    print('拔锚点%s: %s' % (a1, 条目['文本'][:40]))
+
+
+
+    r = am.搜('服务器', 3)
+
+    print('搜"服务器":')
+
+    for 条 in r:
+
+        print('  [%s][%.2f] %s' % (条['锚点'], 条['相似度'], 条['文本'][:40]))
+
+
+
+    print('状态:', am.状态())
+
+    print('自测通过')
+
