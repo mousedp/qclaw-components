@@ -1,0 +1,183 @@
+
+
+import os
+import sys
+import time
+import json
+import threading
+
+class 海马体:
+
+    def __init__(self):
+        self.插槽 = {}
+        self.插槽数量 = 16
+        self.所有组件 = {}
+        self.日志 = []
+        self._巩固定时器 = None
+        self._启动巩固循环()
+
+    def 插入(self, 组件, 槽位=None):
+
+        if 槽位 is None:
+            for i in range(1, self.插槽数量 + 1):
+                if i not in self.插槽:
+                    槽位 = i
+                    break
+            if 槽位 is None:
+                return {'ok': False, '原因': '所有插槽已满'}
+        if 槽位 in self.插槽:
+            return {'ok': False, '原因': f'槽{槽位}已被占用'}
+        名称 = 组件.get('名称', lambda: '?')()
+
+        for 接口 in ['处理', '训练']:
+            if not callable(组件.get(接口)):
+                return {'ok': False, '原因': f'组件缺少可调用接口: {接口}'}
+
+        self.插槽[槽位] = 组件
+        self.所有组件[名称] = {'组件': 组件, '槽位': 槽位}
+        self._记日志(f'插入 [{名称}] → 槽{槽位}')
+        return {'ok': True, '槽位': 槽位}
+
+    def 拔出(self, 名称):
+
+        for 槽, 组 in list(self.插槽.items()):
+            if 组.get('名称', lambda: None)() == 名称:
+                del self.插槽[槽]
+                del self.所有组件[名称]
+                self._记日志(f'拔出 [{名称}] ← 槽{槽}')
+                return {'ok': True, '槽位': 槽}
+        return {'ok': False, '原因': f'未找到 [{名称}]'}
+
+    def 插槽列表(self):
+        return {
+            f'槽{i}': (self.插槽[i].get('名称', lambda: '?')() if i in self.插槽 else '空闲')
+            for i in range(1, self.插槽数量 + 1)
+        }
+
+    def 投喂(self, 数据, 来源=''):
+
+        if not isinstance(数据, str) or len(数据.strip()) < 2:
+            return False
+
+        for 名称, 条目 in self.所有组件.items():
+            组件 = 条目['组件']
+            try:
+                if callable(组件.get('处理')):
+                    结果 = 组件['处理'](数据)
+                    self._记日志(f'[{名称}] 处理 "{数据[:20]}..."')
+            except Exception as e:
+                self._记日志(f'[{名称}] 处理失败: {e}')
+        return True
+
+    def 训练(self, 数据, 来源=''):
+
+        for 名称, 条目 in self.所有组件.items():
+            组件 = 条目['组件']
+            try:
+                if callable(组件.get('训练')):
+                    组件['训练'](数据, 来源)
+            except:
+                pass
+        return True
+
+    def 搜(self, 查询, 数量=5):
+
+        所有结果 = []
+        for 名称, 条目 in self.所有组件.items():
+            组件 = 条目['组件']
+            try:
+                if callable(组件.get('搜')):
+                    结果 = 组件['搜'](查询, 数量)
+                    for 条 in 结果:
+                        条['来源'] = 名称
+                    所有结果.extend(结果)
+            except:
+                pass
+
+        所有结果.sort(key=lambda x: x.get('综合分', 0), reverse=True)
+        return 所有结果[:数量]
+
+    def 睡眠巩固(self):
+
+        self._记日志('[海马体] 睡眠巩固开始')
+
+        for 名称, 条目 in self.所有组件.items():
+            组件 = 条目['组件']
+            try:
+                if callable(组件.get('训练')):
+                    组件['训练'](None, '睡眠巩固')
+            except:
+                pass
+
+        self._记日志('[海马体] 睡眠巩固完成')
+
+    def _启动巩固循环(self):
+
+        def _循环():
+            while True:
+                time.sleep(300)
+                try:
+                    self.睡眠巩固()
+                except:
+                    pass
+
+        t = threading.Thread(target=_循环, daemon=True)
+        t.start()
+        self._巩固定时器 = t
+        self._记日志('[海马体] 睡眠巩固定时器已启动（每5分钟）')
+
+    def _记日志(self, 消息):
+        ts = time.strftime('%H:%M:%S')
+        条目 = f'[{ts}]{消息}'
+        self.日志.append(条目)
+        if len(self.日志) > 100:
+            self.日志 = self.日志[-100:]
+        print(条目)
+
+    def 状态(self):
+        return {
+            '组件数': len(self.所有组件),
+            '空闲槽': 16 - len(self.插槽),
+            '插槽': self.插槽列表(),
+            '组件列表': list(self.所有组件.keys()),
+            '日志条数': len(self.日志),
+        }
+
+if __name__ == '__main__':
+    print('=== 海马体 v1 自测 ===')
+
+    import sys
+    sys.path.insert(0, os.path.dirname(__file__))
+
+    mb = 海马体()
+
+    try:
+        from slot_组件 import 向量组件
+        r = mb.插入(向量组件())
+        print(f'插入向量记忆: 槽{r.get("槽位")}')
+    except Exception as e:
+        print(f'向量组件加载失败: {e}')
+
+    空组件 = {
+        '名称': lambda: '空转',
+        '处理': lambda 数据: None,
+        '训练': lambda 数据, 来源=None: None,
+        '保存': lambda 路径=None: None,
+        '加载': lambda 路径=None: None,
+    }
+    r = mb.插入(空组件)
+    print(f'插入空转: 槽{r.get("槽位")}')
+
+    print('插槽状态:', mb.插槽列表())
+    print('组件列表:', mb.所有组件.keys())
+
+    mb.投喂('天翼云服务器IP是101.227.49.22', '自测')
+    mb.投喂('简芯神经网络跑在8500端口', '自测')
+
+    r = mb.搜('服务器IP', 3)
+    print('海马体搜索"服务器IP":')
+    for 条 in r:
+        print(f'  [%s][综合%.3f] %s' % (条.get('来源','?'), 条.get('综合分',0), 条['文本'][:50]))
+
+    print('海马体状态:', mb.状态())
+    print('自测通过')
