@@ -1,0 +1,474 @@
+
+
+
+
+import sys, os, time, json
+
+
+
+def 记忆卡组件(记忆卡实例):
+
+
+
+    return {
+
+        '名称': lambda: '记忆卡',
+
+        '处理': lambda 数据: 记忆卡实例.store(数据) if isinstance(数据, str) and not 数据.startswith('search:') else (
+
+            记忆卡实例.search(数据[7:]) if 数据.startswith('search:') else {'ok': False}
+
+        ),
+
+        '训练': lambda 数据, 来源=None: None,
+
+        '保存': lambda 路径=None: None,
+
+        '加载': lambda 路径=None: None,
+
+    }
+
+
+
+def 心跳组件():
+
+
+
+    try:
+
+        sys.path.insert(0, os.path.dirname(__file__))
+
+        from 派心跳 import 派心跳组件
+
+        return 派心跳组件(interval=60)
+
+    except Exception as e:
+
+        print(f'[slot] 派心跳加载失败: {e}')
+
+        return {
+
+        '名称': lambda: '心跳检测',
+
+        '处理': lambda 数据: _心跳() if isinstance(数据, str) else None,
+
+        '训练': lambda 数据, 来源=None: None,
+
+        '保存': lambda 路径=None: None,
+
+        '加载': lambda 路径=None: None,
+
+    }
+
+
+
+def 向量组件():
+
+
+
+    try:
+
+        sys.path.insert(0, os.path.dirname(__file__))
+
+        from slot_向量 import 向量
+
+        vm = 向量()
+
+        return {
+
+            '名称': lambda: '向量记忆',
+
+            '处理': lambda 数据: vm.搜(数据[3:]) if isinstance(数据, str) and 数据.startswith('q:') else (
+
+                vm.记(数据) if isinstance(数据, str) else {'ok': False}
+
+            ),
+
+            '训练': lambda 数据, 来源=None: vm.记(str(数据)) if 数据 else None,
+
+            '保存': lambda 路径=None: None,
+
+            '加载': lambda 路径=None: None,
+
+            '搜': lambda 查询, k=5: vm.搜(查询, k),
+
+            '记': lambda 文本, 标题='', 标签=None: vm.记(文本, 标题, 标签),
+
+            '条数': lambda: vm.条数(),
+
+            '状态': lambda: vm.状态(),
+
+        }
+
+    except Exception as e:
+
+        print(f'[slot] 向量加载失败: {e}')
+
+        return {
+
+            '名称': lambda: '向量记忆',
+
+            '处理': lambda 数据: None,
+
+            '训练': lambda 数据, 来源=None: None,
+
+            '保存': lambda 路径=None: None,
+
+            '加载': lambda 路径=None: None,
+
+        }
+
+
+
+def 海马体组件():
+
+
+
+    try:
+
+        sys.path.insert(0, os.path.dirname(__file__))
+
+        from slot_海马体 import 海马体
+
+        mb = 海马体()
+
+
+
+        from slot_组件 import 向量组件
+
+        mb.插入(向量组件())
+
+
+
+        return {
+
+            '名称': lambda: '海马体',
+
+            '处理': lambda 数据: mb.投喂(数据),
+
+            '训练': lambda 数据, 来源=None: mb.训练(数据, 来源) if 数据 else mb.睡眠巩固(),
+
+            '保存': lambda 路径=None: None,
+
+            '加载': lambda 路径=None: None,
+
+            '搜': lambda 查询, k=5: mb.搜(查询, k),
+
+            '投喂': lambda 数据: mb.投喂(数据),
+
+            '插槽': lambda: mb.插槽列表(),
+
+            '状态': lambda: mb.状态(),
+
+        }
+
+    except Exception as e:
+
+        print(f'[slot] 海马体加载失败: {e}')
+
+        return {
+
+            '名称': lambda: '海马体',
+
+            '处理': lambda 数据: None,
+
+            '训练': lambda 数据, 来源=None: None,
+
+            '保存': lambda 路径=None: None,
+
+            '加载': lambda 路径=None: None,
+
+        }
+
+
+
+def 蒸馏组件():
+
+
+
+    try:
+
+        sys.path.insert(0, os.path.dirname(__file__))
+
+        from slot_向量 import 向量
+
+        from slot_蒸馏 import 知识蒸馏器
+
+        vm = 向量()
+
+        kd = 知识蒸馏器(vm)
+
+
+
+        kd.蒸馏()
+
+        return {
+
+            '名称': lambda: '知识蒸馏',
+
+            '处理': lambda 数据: None,
+
+            '训练': lambda 数据, 来源=None: kd.蒸馏() if 数据 is None else None,
+
+            '保存': lambda 路径=None: None,
+
+            '加载': lambda 路径=None: None,
+
+            '蒸馏': lambda: kd.蒸馏(),
+
+            '搜': lambda 查询, k=3: kd.查询蒸馏(查询, k),
+
+            '状态': lambda: kd.状态(),
+
+        }
+
+    except Exception as e:
+
+        print(f'[slot] 蒸馏加载失败: {e}')
+
+        return {
+
+            '名称': lambda: '知识蒸馏',
+
+            '处理': lambda 数据: None,
+
+            '训练': lambda 数据, 来源=None: None,
+
+            '保存': lambda 路径=None: None,
+
+            '加载': lambda 路径=None: None,
+
+        }
+
+
+
+def 锚点组件():
+
+
+
+    try:
+
+        sys.path.insert(0, os.path.dirname(__file__))
+
+        from slot_锚点 import 锚点记忆
+
+        am = 锚点记忆()
+
+        return {
+
+            '名称': lambda: '锚点记忆',
+
+            '处理': lambda 数据: am.钉(str(数据)) if isinstance(数据, str) else None,
+
+            '训练': lambda 数据, 来源=None: am.钉(str(数据)) if 数据 else None,
+
+            '保存': lambda 路径=None: None,
+
+            '加载': lambda 路径=None: None,
+
+            '钉': lambda 文本, 标题='', 标签=None: am.钉(文本, 标题, 标签),
+
+            '拔': lambda 锚点: am.拔(锚点),
+
+            '搜': lambda 查询, k=5: am.搜(查询, k),
+
+            '条数': lambda: am.条数(),
+
+            '状态': lambda: am.状态(),
+
+        }
+
+    except Exception as e:
+
+        print(f'[slot] 锚点加载失败: {e}')
+
+        return {
+
+            '名称': lambda: '锚点记忆',
+
+            '处理': lambda 数据: None,
+
+            '训练': lambda 数据, 来源=None: None,
+
+            '保存': lambda 路径=None: None,
+
+            '加载': lambda 路径=None: None,
+
+        }
+
+
+
+def 图谱组件():
+
+
+
+    try:
+
+        sys.path.insert(0, os.path.dirname(__file__))
+
+        from slot_向量 import 向量
+
+        from slot_图谱 import 知识图谱
+
+        vm = 向量()
+
+        kg = 知识图谱(vm)
+
+        kg.构建()
+
+        return {
+
+            '名称': lambda: '知识图谱',
+
+            '处理': lambda 数据: None,
+
+            '训练': lambda 数据, 来源=None: kg.构建() if 数据 is None else None,
+
+            '保存': lambda 路径=None: None,
+
+            '加载': lambda 路径=None: None,
+
+            '构建': lambda: kg.构建(),
+
+            '搜': lambda 查询, k=5: kg.搜(查询, k),
+
+            '查询': lambda 实体, 深度=2, 最多=5: kg.查询(实体, 深度, 最多),
+
+            '状态': lambda: kg.状态(),
+
+        }
+
+    except Exception as e:
+
+        print(f'[slot] 图谱加载失败: {e}')
+
+        return {
+
+            '名称': lambda: '知识图谱',
+
+            '处理': lambda 数据: None,
+
+            '训练': lambda 数据, 来源=None: None,
+
+            '保存': lambda 路径=None: None,
+
+            '加载': lambda 路径=None: None,
+
+        }
+
+
+
+
+
+def 上下文组件():
+
+    """包装长上下文为插槽格式"""
+
+    try:
+
+        sys.path.insert(0, os.path.dirname(__file__))
+
+        from slot_上下文 import 长上下文
+
+        ctx = 长上下文(窗口大小=50)
+
+        return {
+
+            '名称': lambda: '长上下文',
+
+            '处理': lambda 数据: ctx.喂(str(数据)) if 数据 else None,
+
+            '训练': lambda 数据, 来源=None: None,
+
+            '保存': lambda 路径=None: None,
+
+            '加载': lambda 路径=None: None,
+
+            '喂': lambda 内容, 类型='消息', 重要度=0: ctx.喂(内容, 类型, 重要度),
+
+            '标记': lambda 索引=None, id=None: ctx.标记(索引, id),
+
+            '浓缩': lambda 压缩比=0.5: ctx.浓缩(压缩比),
+
+            '获取': lambda 格式='文本': ctx.获取(格式),
+
+            '统计': lambda: ctx.统计(),
+
+            '状态': lambda: ctx.统计(),
+
+        }
+
+    except Exception as e:
+
+        print(f'[slot] 上下文加载失败: {e}')
+
+        return {
+
+            '名称': lambda: '长上下文',
+
+            '处理': lambda 数据: None,
+
+            '训练': lambda 数据, 来源=None: None,
+
+            '保存': lambda 路径=None: None,
+
+            '加载': lambda 路径=None: None,
+
+        }
+
+
+
+组件目录 = {
+
+    '记忆卡': {'文件': '01-记忆组件三合一/memory_component.py', '状态': '✅ 可插', '说明': '存+搜+分类'},
+
+    '心跳':  {'文件': '02-神经网络四合一/派心跳.py', '状态': '✅ 已合并插槽', '说明': '派心跳三件套合并版(π+双哈希)'},
+
+    '简芯':  {'文件': '02-神经网络四合一/简芯_v1.py', '状态': '✅ 已内置', '说明': '神经网络+16插槽（宿主）'},
+
+    '向量':  {'文件': '02-神经网络四合一/slot_向量.py', '状态': '✅ 已就绪', '说明': 'TF-IDF向量记忆搜索，零额外依赖'},
+
+    '海马体': {'文件': '02-神经网络四合一/slot_海马体.py', '状态': '✅ 已就绪', '说明': '调度系统主板，含向量记忆+睡眠巩固'},
+
+    '蒸馏':  {'文件': '02-神经网络四合一/slot_蒸馏.py', '状态': '✅ 已就绪', '说明': '知识蒸馏，记忆压缩+精华提取'},
+
+    '锚点':  {'文件': '02-神经网络四合一/slot_锚点.py', '状态': '✅ 已就绪', '说明': '超级锚点记忆，全局唯一记忆钉'},
+
+    '上下文': {'文件': '02-神经网络四合一/slot_上下文.py', '状态': '✅ 已就绪', '说明': '长上下文管理，窗口压缩+保护'},
+
+    '时间戳': {'文件': '?', '状态': '❌ 无独立文件', '说明': '未找到独立组件'},
+
+    '知识图谱': {'文件': '02-神经网络四合一/slot_图谱.py', '状态': '✅ 已就绪', '说明': '轻量关联图谱，实体共现分析'},
+
+    '锚点效应': {'文件': '?', '状态': '❌ 无独立文件', '说明': '未找到独立组件'},
+
+}
+
+
+
+if __name__ == '__main__':
+
+    sep = '=' * 45
+
+    print(sep)
+
+    print(' 简芯 插槽就绪组件 清单')
+
+    print(sep)
+
+    print(f' {"名称":>8} │ {"状态":<10} │ {"说明":<20}')
+
+    print('─' * 45)
+
+    for 名, 信息 in 组件目录.items():
+
+        print(f' {名:>8} │ {信息["状态"]:<10} │ {信息["说明"]:<20}')
+
+    print(sep)
+
+    print(' 可插: 记忆卡 + 心跳')
+
+    print(' 宿主: 简芯守护（16槽内置）')
+
+    print(sep)
+
