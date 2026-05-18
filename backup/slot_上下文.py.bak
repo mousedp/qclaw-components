@@ -1,0 +1,338 @@
+
+
+
+
+import os
+
+from zst_透明层 import zst_pickle_load, zst_pickle_dump
+
+import pickle
+
+import time
+
+import json
+
+from collections import deque
+
+
+
+class 上下文片段:
+
+
+
+    def __init__(self, 内容, 类型='消息', 重要度=0):
+
+        self.id = hash(内容 + str(time.time()))
+
+        self.内容 = 内容
+
+        self.类型 = 类型
+
+        self.重要度 = 重要度
+
+        self.时间 = time.time()
+
+        self.已压缩 = False
+
+
+
+    def 浓缩(self):
+
+
+
+        if len(self.内容) > 200:
+
+            self.内容 = self.内容[:180] + '…[已压缩]'
+
+            self.已压缩 = True
+
+
+
+class 长上下文:
+
+
+
+    def __init__(self, 窗口大小=50, 工作目录=None):
+
+        self.窗口大小 = 窗口大小
+
+        if 工作目录 is None:
+
+            工作目录 = os.path.join(os.path.dirname(__file__), '中枢数据')
+
+        self.持久化文件 = os.path.join(工作目录, '长上下文.pkl')
+
+        self.活跃窗口 = deque(maxlen=窗口大小)
+
+        self.压缩层 = []
+
+        self.归档层 = []
+
+        self.保护标记 = set()
+
+        self._加载()
+
+
+
+    def 喂(self, 内容, 类型='消息', 重要度=0):
+
+
+
+        片段 = 上下文片段(内容, 类型, 重要度)
+
+        self.活跃窗口.append(片段)
+
+
+
+        if len(self.活跃窗口) >= self.窗口大小:
+
+            self.浓缩()
+
+        return True
+
+
+
+    def 标记(self, 索引=None, id=None):
+
+
+
+        if 索引 is not None and 0 <= 索引 < len(self.活跃窗口):
+
+            self.保护标记.add(self.活跃窗口[索引].id)
+
+        elif id is not None:
+
+            for s in self.活跃窗口:
+
+                if s.id == id:
+
+                    self.保护标记.add(s.id)
+
+                    break
+
+
+
+    def 浓缩(self, 压缩比=0.5):
+
+
+
+        目标 = max(1, int(len(self.活跃窗口) * 压缩比))
+
+        if len(self.活跃窗口) <= 目标:
+
+            return
+
+
+
+        排序后 = sorted(self.活跃窗口, key=lambda s: (
+
+            1 if s.id in self.保护标记 else 0,
+
+            s.重要度,
+
+            s.时间
+
+        ), reverse=True)
+
+
+
+        保留 = 排序后[:目标]
+
+        待压缩 = 排序后[目标:]
+
+
+
+        if 待压缩:
+
+            摘要内容 = ' | '.join([s.内容[:50] for s in 待压缩[:10]])
+
+            if len(待压缩) > 10:
+
+                摘要内容 += f' | ...（共{len(待压缩)}条已压缩）'
+
+            摘要 = 上下文片段(摘要内容, '摘要', 重要度=0)
+
+            摘要.已压缩 = True
+
+            self.压缩层.append(摘要)
+
+
+
+            for s in 待压缩:
+
+                s.浓缩()
+
+            self.归档层.extend(待压缩)
+
+
+
+        self.活跃窗口 = deque(保留, maxlen=self.窗口大小)
+
+        self._保存()
+
+
+
+    def 获取(self, 格式='文本'):
+
+
+
+        if 格式 == '文本':
+
+            行 = []
+
+            for s in self.活跃窗口:
+
+                前缀 = '⭐' if s.id in self.保护标记 else ''
+
+                行.append(f'{前缀}{s.内容}')
+
+            if self.压缩层:
+
+                行.append('【已压缩】')
+
+                for s in self.压缩层[-3:]:
+
+                    行.append(f'  📦{s.内容}')
+
+            return '\n'.join(行)
+
+        else:
+
+            return {
+
+                '活跃': [{'内容': s.内容, '重要度': s.重要度, '已压缩': s.已压缩} for s in self.活跃窗口],
+
+                '压缩': [{'内容': s.内容} for s in self.压缩层[-5:]],
+
+                '归档': len(self.归档层),
+
+            }
+
+
+
+    def 统计(self):
+
+        return {
+
+            '窗口大小': len(self.活跃窗口),
+
+            '窗口上限': self.窗口大小,
+
+            '压缩层条数': len(self.压缩层),
+
+            '归档条数': len(self.归档层),
+
+            '保护标记数': len(self.保护标记),
+
+        }
+
+
+
+    def 重置(self):
+
+
+
+        self.活跃窗口.clear()
+
+        self.压缩层.clear()
+
+        self.归档层.clear()
+
+        self.保护标记.clear()
+
+        self._保存()
+
+
+
+    def _保存(self):
+
+        with open(self.持久化文件, 'wb') as f:
+
+            zst_pickle_dump({
+
+                '窗口大小': self.窗口大小,
+
+                '活跃': [(s.内容, s.类型, s.重要度, s.时间, s.id) for s in self.活跃窗口],
+
+                '压缩': [(s.内容, s.时间) for s in self.压缩层],
+
+                '归档': [(s.内容, s.时间) for s in self.归档层],
+
+                '保护': list(self.保护标记),
+
+            }, f)
+
+
+
+    def _加载(self):
+
+        if os.path.exists(self.持久化文件):
+
+            try:
+
+                with open(self.持久化文件, 'rb') as f:
+
+                    d = zst_pickle_load(self.持久化文件)
+
+                self.窗口大小 = d.get('窗口大小', self.窗口大小)
+
+                self.活跃窗口 = deque(
+
+                    [上下文片段(c, t, imp) for c, t, imp, _, _ in d.get('活跃', [])],
+
+                    maxlen=self.窗口大小
+
+                )
+
+                self.压缩层 = [上下文片段(c, '摘要') for c, _ in d.get('压缩', [])]
+
+                self.归档层 = [上下文片段(c) for c, _ in d.get('归档', [])]
+
+                self.保护标记 = set(d.get('保护', []))
+
+            except:
+
+                pass
+
+
+
+if __name__ == '__main__':
+
+    print('=== 长上下文 v1 自测 ===')
+
+    ctx = 长上下文(窗口大小=10)
+
+
+
+    for i in range(15):
+
+        r = ctx.喂(f'这是第{i+1}条消息，内容是一些测试文本用于验证上下文管理功能', 重要度=i%3)
+
+    print('喂了15条消息给窗口上限10')
+
+    print('统计:', ctx.统计())
+
+    print()
+
+
+
+    ctx.标记(索引=2)
+
+    print('标记第3条为重要')
+
+
+
+    print('当前上下文:')
+
+    print(ctx.获取())
+
+    print()
+
+
+
+    ctx.重置()
+
+    print('统计(重置后):', ctx.统计())
+
+    print('自测通过')
+
