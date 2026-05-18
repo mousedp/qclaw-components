@@ -1,0 +1,1094 @@
+
+
+
+
+import math,random,json,re,time,os,sys,glob,threading,struct
+
+from collections import Counter
+
+
+
+def sigmoid(x): x=max(-100,min(100,x)); return 1.0/(1.0+math.exp(-x))
+
+def sigmoid_d(x): s=sigmoid(x); return s*(1.0-s)
+
+def relu(x): return max(0.0,x)
+
+def relu_d(x): return 1.0 if x>0 else 0.0
+
+def dot(a,b): return sum(x*y for x,y in zip(a,b))
+
+def _add(a,b): return [x+y for x,y in zip(a,b)]
+
+def _sf(v):
+
+    mx=max(v); ex=[math.exp(x-mx) for x in v]; s=sum(ex)
+
+    return [(x)/(s+1e-10) for x in ex]
+
+def _si(x): return x*(1.0/(1.0+math.exp(-x)))
+
+def _rn(h,w,e=1e-5):
+
+    m=sum(x*x for x in h)/len(h); sc=1.0/math.sqrt(m+e)
+
+    return [h[i]*w[i]*sc for i in range(len(h))]
+
+def _rnB(H,w,e=1e-5):
+
+    return [[_rn(h,w,e) for h in b] for b in H]
+
+def _li(h,w):
+
+    return [sum(h[j]*w[i][j] for j in range(len(h))) for i in range(len(w))]
+
+def _liB(H,w):
+
+    return [[_li(h,w) for h in b] for b in H]
+
+def _sh(x):
+
+    s=[len(x)]
+
+    while isinstance(x[0],list): x=x[0]; s.append(len(x))
+
+    return tuple(s)
+
+def _ffn(h,w1,w2):
+
+    mid=[_si(v) for v in _li(h,w1)]
+
+    return _li(mid,w2)
+
+def _gate_ffn(h,wg,wu,wd):
+
+    g=[_si(v) for v in _li(h,wg)]
+
+    u=[_si(v) for v in _li(h,wu)]
+
+    m=[g[i]*u[i] for i in range(len(g))]
+
+    return _li(m,wd)
+
+def zeros(s):
+
+    if len(s)==0: return 0.0
+
+    if len(s)==1: return [0.0]*s[0]
+
+    return [zeros(s[1:]) for _ in range(s[0])]
+
+
+
+class TextVectorizer:
+
+    def __init__(self,mf=256): self.vocab={}; self.max_features=mf; self.idf={}
+
+    def tokenize(self,text):
+
+        t=[]; t.extend(re.findall(r'[\u4e00-\u9fff]',text))
+
+        t.extend(re.findall(r'[a-zA-Z0-9_]+',text.lower())); return t
+
+    def fit(self,texts):
+
+        at=Counter(); df=Counter()
+
+        for txt in texts:
+
+            for t in set(self.tokenize(txt)): df[t]+=1
+
+            at.update(self.tokenize(txt))
+
+        top=[t for t,_ in at.most_common(self.max_features)]
+
+        self.vocab={t:i for i,t in enumerate(top)}
+
+        nd=len(texts)
+
+        for t in self.vocab: self.idf[t]=math.log((nd+1)/(df.get(t,0)+1))+1
+
+    def transform(self,text):
+
+        v=[0.0]*self.max_features
+
+        tokens=self.tokenize(text); tf=Counter(tokens)
+
+        mtf=max(tf.values()) if tf else 1
+
+        for t,c in tf.items():
+
+            if t in self.vocab:
+
+                i=self.vocab[t]
+
+                if i<self.max_features: v[i]=(c/mtf)*self.idf.get(t,1.0)
+
+        return v
+
+
+
+class MLPLayer:
+
+    def __init__(self,ni,no,act='sigmoid'):
+
+        self.ni=ni; self.no=no; self.act=act
+
+        sc=math.sqrt(2.0/(ni+no))
+
+        self.w=[[random.gauss(0,sc) for _ in range(no)] for _ in range(ni)]
+
+        self.b=[0.0]*no; self.xin=None; self.zout=None
+
+    def fn(self,z):
+
+        if self.act=='sigmoid': return sigmoid(z)
+
+        elif self.act=='relu': return relu(z)
+
+        return z
+
+    def fn_d(self,z):
+
+        if self.act=='sigmoid': return sigmoid_d(z)
+
+        elif self.act=='relu': return relu_d(z)
+
+        return 1.0
+
+    def forward(self,x):
+
+        self.xin=x; z=[dot(x,[self.w[i][j] for i in range(self.ni)])+self.b[j] for j in range(self.no)]
+
+        self.zout=z; return [self.fn(zj) for zj in z]
+
+
+
+class 简芯:
+
+
+
+    def __init__(self,ins=256,hid=None,outs=16,lr=0.05):
+
+        if hid is None: hid=[64,32]
+
+        self.layers=[]; sizes=[ins]+hid+[outs]
+
+        for i in range(len(sizes)-1):
+
+            a='relu' if i<len(sizes)-2 else 'linear'
+
+            self.layers.append(MLPLayer(sizes[i],sizes[i+1],a))
+
+        self.lr=lr; self.vec=TextVectorizer(mf=ins)
+
+        self.标签映射={}; self.反向标签={}; self.权重路径=None
+
+    def forward(self,x):
+
+        for l in self.layers: x=l.forward(x)
+
+        return x
+
+    def 获取标签(self,来源):
+
+
+
+        if 来源 not in self.标签映射:
+
+            tid=len(self.标签映射)
+
+            if tid>=self.layers[-1].no: tid=tid%self.layers[-1].no
+
+            self.标签映射[来源]=tid
+
+            self.反向标签[tid]=来源
+
+        return self.标签映射[来源]
+
+    def 投喂(self,文本,来源):
+
+
+
+        tid=self.获取标签(来源)
+
+        cat=['来源_'+来源[:12]] if hasattr(self,'反向标签') else [str(tid)]
+
+        X=[self.vec.transform(文本)]
+
+        Y=[[1.0 if i==tid else 0.0 for i in range(self.layers[-1].no)]]
+
+        for x,y in zip(X,Y):
+
+            out=_sf(self.forward(x))
+
+            delta=[o-t for o,t in zip(out,y)]
+
+            for idx in range(len(self.layers)-1,-1,-1):
+
+                l=self.layers[idx]; px=l.xin
+
+                for j in range(l.no):
+
+                    dj=delta[j]
+
+                    for i in range(l.ni): l.w[i][j]-=self.lr*dj*px[i]
+
+                    l.b[j]-=self.lr*dj
+
+                if idx>0:
+
+                    pd=[0.0]*l.ni
+
+                    for i in range(l.ni):
+
+                        pd[i]=sum(delta[j]*l.w[i][j] for j in range(l.no))*self.layers[idx-1].fn_d(self.layers[idx-1].zout[i])
+
+                    delta=pd
+
+        return {'已学习':True,'来源':来源,'标签':tid}
+
+    def 批量训练(self,文本列表,来源列表,轮次=10):
+
+
+
+        if not 文本列表: return
+
+        texts=文本列表; labels=[self.获取标签(s) for s in 来源列表]
+
+        self.vec.fit(texts)
+
+        X=[self.vec.transform(t) for t in texts]
+
+        Y=[[1.0 if i==l else 0.0 for i in range(self.layers[-1].no)] for l in labels]
+
+
+
+        cnt=[0]*self.layers[-1].no
+
+        for l in labels: cnt[l]+=1
+
+        n=len(labels); na=sum(1 for c in cnt if c>0)
+
+        cw=[min(3.0,max(0.2,(n/(c*na))**0.5)) if c>0 else 1.0 for c in cnt]
+
+        for ep in range(轮次):
+
+            for i,(x,y) in enumerate(zip(X,Y)):
+
+                out=_sf(self.forward(x))
+
+                delta=[(o-t)*cw[labels[i]] for o,t in zip(out,y)]
+
+                for idx in range(len(self.layers)-1,-1,-1):
+
+                    l=self.layers[idx]; px=l.xin
+
+                    for j in range(l.no):
+
+                        dj=delta[j]
+
+                        for i in range(l.ni): l.w[i][j]-=self.lr*dj*px[i]
+
+                        l.b[j]-=self.lr*dj
+
+                    if idx>0:
+
+                        pd=[0.0]*l.ni
+
+                        for i in range(l.ni):
+
+                            pd[i]=sum(delta[j]*l.w[i][j] for j in range(l.no))*self.layers[idx-1].fn_d(self.layers[idx-1].zout[i])
+
+                        delta=pd
+
+    def 预测(self,文本):
+
+        x=self.vec.transform(文本); out=_sf(self.forward(x))
+
+        mx=max(out); cats=[self.反向标签.get(i,f'类{i}') for i in range(len(out))]
+
+        return {'来源':cats[out.index(mx)],'置信度':round(mx,4),'概率':{c:round(p,4) for c,p in zip(cats,out)}}
+
+    def 保存(self,路径):
+
+
+
+        params={}; shapes={}
+
+        for i,l in enumerate(self.layers):
+
+            for nm,dt in [('w',l.w),('b',l.b)]:
+
+                k=f'layers.{i}.{nm}'
+
+                if nm=='w':
+
+                    flat=[v for r in dt for v in r]; shapes[k]=[l.ni,l.no]
+
+                else:
+
+                    flat=list(dt); shapes[k]=[l.no]
+
+                params[k]=struct.pack(f'<{len(flat)}f',*flat)
+
+        offset_map={}; pos=0
+
+        for k,raw in params.items():
+
+            offset_map[k]={'dtype':'F32','shape':shapes[k],'data_offsets':[pos,pos+len(raw)]}
+
+            pos+=len(raw)
+
+        meta={'vec_vocab':self.vec.vocab,'vec_idf':self.vec.idf,'vec_mf':self.vec.max_features,
+
+              '标签映射':self.标签映射,'反向标签':{str(k):v for k,v in self.反向标签.items()},'lr':self.lr}
+
+        header={'metadata':meta,**offset_map}
+
+        hdr=json.dumps(header,ensure_ascii=False).encode('utf-8')
+
+        with open(路径,'wb') as f:
+
+            f.write(struct.pack('<Q',len(hdr))); f.write(hdr)
+
+            for k in params: f.write(params[k])
+
+        return True
+
+    def 加载(self,路径):
+
+
+
+        with open(路径,'rb') as f:
+
+            n=struct.unpack('<Q',f.read(8))[0]
+
+            hdr=json.loads(f.read(n).decode('utf-8'))
+
+            meta=hdr.pop('metadata',{})
+
+            for k,v in hdr.items():
+
+                lo,hi=v['data_offsets']; f.seek(8+n+lo); raw=f.read(hi-lo)
+
+                vals=list(struct.unpack(f'<{len(raw)//4}f',raw))
+
+                parts=k.split('.')
+
+                if parts[0]=='layers':
+
+                    li=int(parts[1]); nm=parts[2]
+
+                    if nm=='w':
+
+                        no=self.layers[li].no
+
+                        self.layers[li].w=[[vals[r*no+c] for c in range(no)] for r in range(self.layers[li].ni)]
+
+                    else: self.layers[li].b=vals
+
+            self.vec.vocab=meta.get('vec_vocab',{}); self.vec.idf=meta.get('vec_idf',{})
+
+            self.vec.max_features=meta.get('vec_mf',256)
+
+            self.标签映射=meta.get('标签映射',{}); self.反向标签={int(k):v for k,v in meta.get('反向标签',{}).items()}
+
+            meta.pop('lr',None); self.lr=meta.get('lr',self.lr)
+
+        return True
+
+
+
+class FreqCache:
+
+    def __init__(self,dim,sl,base=10000.0):
+
+        hf=dim//2; self.c=[]; self.s=[]
+
+        for p in range(sl):
+
+            cr=[]; sr=[]
+
+            for i in range(hf):
+
+                a=p/base**(2.0*i/dim); cr.append(math.cos(a)); sr.append(math.sin(a))
+
+            self.c.append(cr); self.s.append(sr)
+
+
+
+def rope_b(Q,fc,sp):
+
+    hf=len(fc.c[0]) if fc.c else 0; res=[]
+
+    if hf==0: return Q
+
+    for bi,b in enumerate(Q):
+
+        rb=[]
+
+        for si,q in enumerate(b):
+
+            pos=sp+si; rh=[]
+
+            for hd in q:
+
+                o=[0.0]*len(hd)
+
+                for i in range(min(hf,len(hd)//2)):
+
+                    c=fc.c[pos][i]; s=fc.s[pos][i]
+
+                    o[2*i]=hd[2*i]*c-hd[2*i+1]*s
+
+                    o[2*i+1]=hd[2*i]*s+hd[2*i+1]*c
+
+                rh.append(o)
+
+            rb.append(rh)
+
+        res.append(rb)
+
+    return res
+
+
+
+class ModelConfig:
+
+    def __init__(self,**kw):
+
+        d=lambda k,v: kw.get(k,v)
+
+        self.dim=d('dim',64); self.n_layers=d('n_layers',2)
+
+        self.n_heads=d('n_heads',4); self.n_kv_heads=d('n_kv_heads',2)
+
+        self.vocab_size=d('vocab_size',256); self.max_seq_len=d('max_seq_len',64)
+
+        self.head_dim=self.dim//self.n_heads
+
+        self.attn_type=d('attn_type','standard')
+
+        self.kv_lora_rank=d('kv_lora_rank',16)
+
+        self.qk_rope_head_dim=d('qk_rope_head_dim',4)
+
+        self.v_head_dim=d('v_head_dim',4)
+
+        self.n_dense=d('n_dense_layers',1); self.n_routed=d('n_routed_experts',4)
+
+        self.n_act=d('n_activated_experts',2)
+
+    def llm(self): self.attn_type='standard'
+
+    def deepseek(self): self.attn_type='mla'; self.n_dense=max(1,self.n_layers//4)
+
+
+
+def attn(aw,H,sp,fc,cfg,kv,attn_type='standard'):
+
+
+
+    b=len(H); sl=len(H[0]); ep=sp+sl; hd=cfg.head_dim; nr=cfg.n_heads//cfg.n_kv_heads
+
+    nk=cfg.n_kv_heads; nh=cfg.n_heads
+
+    Q=_liB(H,aw[0])
+
+    Q=[[[q[h*hd:(h+1)*hd] for h in range(nh)] for q in c] for c in Q]
+
+    if attn_type=='mla':
+
+        lr=cfg.kv_lora_rank; rhd=cfg.qk_rope_head_dim; vhd=cfg.v_head_dim
+
+        Wkv=aw[1]; Wuk=aw[3]; Wuv=aw[5]; o_idx=2
+
+        Q_std=[[[q[:-rhd] for q in c] for c in b] for b in Q]
+
+        Q_rope=[[[q[-rhd:] for q in c] for c in b] for b in Q]
+
+        K_list=[]; V_list=[]; KR_list=[]
+
+        for bi in range(b):
+
+            kb=[]; vb=[]; krb=[]
+
+            for si in range(sl):
+
+                kvc=_li(H[bi][si],Wkv); kc=kvc[:lr]; kp=kvc[lr:]
+
+                kf=_li(kc,Wuk); vf=_li(kc,Wuv)
+
+                kb.append([kf[h*(hd-rhd):(h+1)*(hd-rhd)] for h in range(nk)])
+
+                vb.append([vf[h*vhd:(h+1)*vhd] for h in range(nk)])
+
+                krb.append([kp for _ in range(nk)])
+
+            K_list.append(kb); V_list.append(vb); KR_list.append(krb)
+
+        Q_rope=rope_b(Q_rope,fc,sp); KR_list=rope_b(KR_list,fc,sp)
+
+        ck,cv,cr=kv
+
+        for bi in range(b):
+
+            for si in range(sl):
+
+                for hi in range(nk):
+
+                    for di in range(hd-rhd): ck[bi][sp+si][hi][di]=K_list[bi][si][hi][di]
+
+                    for di in range(rhd): cr[bi][sp+si][hi][di]=KR_list[bi][si][hi][di]
+
+        out=[]
+
+        for bi in range(b):
+
+            ob=[]
+
+            for si in range(sl):
+
+                qs=Q_std[bi][si]; qr=Q_rope[bi][si]; sh=[]
+
+                for hi in range(nh):
+
+                    ki=hi//nr
+
+                    sc=[(sum(qs[hi][d]*ck[bi][ti][ki][d] for d in range(hd-rhd))+sum(qr[hi][d]*cr[bi][ti][ki][d] for d in range(rhd)))/math.sqrt(hd) for ti in range(ep)]
+
+                    sc=_sf(sc)
+
+                    o=[sum(sc[ti]*cv[bi][ti][ki][d] for ti in range(ep)) for d in range(vhd)]
+
+                    sh.append(o)
+
+                ob.append([x for h in sh for x in h])
+
+            out.append(ob)
+
+    else:
+
+        o_idx=3
+
+        K=_liB(H,aw[1]); V=_liB(H,aw[2])
+
+        K=[[[k[h*hd:(h+1)*hd] for h in range(nk)] for k in c] for c in K]
+
+        V=[[[v[h*hd:(h+1)*hd] for h in range(nk)] for v in c] for c in V]
+
+        Q=rope_b(Q,fc,sp); K=rope_b(K,fc,sp)
+
+        ck,cv=kv
+
+        for bi in range(b):
+
+            for si in range(sl):
+
+                for hi in range(nk):
+
+                    for di in range(hd): ck[bi][sp+si][hi][di]=K[bi][si][hi][di]
+
+                    for di in range(hd): cv[bi][sp+si][hi][di]=V[bi][si][hi][di]
+
+        out=[]
+
+        for bi in range(b):
+
+            ob=[]
+
+            for si in range(sl):
+
+                q=Q[bi][si]; sh=[]
+
+                for hi in range(nh):
+
+                    ki=hi//nr
+
+                    sc=[sum(q[hi][d]*ck[bi][ti][ki][d] for d in range(hd))/math.sqrt(hd) for ti in range(ep)]
+
+                    sc=_sf(sc)
+
+                    o=[sum(sc[ti]*cv[bi][ti][ki][d] for ti in range(ep)) for d in range(hd)]
+
+                    sh.append(o)
+
+                ob.append([x for h in sh for x in h])
+
+            out.append(ob)
+
+    return _liB(out,aw[o_idx])
+
+
+
+def moe_ffn(h,w,p,cfg):
+
+    sh_out=_gate_ffn(h,w[f'{p}sh_g'],w[f'{p}sh_u'],w[f'{p}sh_d'])
+
+    scores=_li(h,w[f'{p}rt']); scores=_sf(scores)
+
+    top_k=sorted(range(len(scores)),key=lambda i:scores[i],reverse=True)[:cfg.n_act]
+
+    expert_out=[0.0]*len(sh_out)
+
+    for ei in top_k:
+
+        eo=_gate_ffn(h,w[f'{p}.e{ei}.g'],w[f'{p}.e{ei}.u'],w[f'{p}.e{ei}.d'])
+
+        g=min(scores[ei],1.0)
+
+        expert_out=[expert_out[i]+eo[i]*g for i in range(len(eo))]
+
+    return [sh_out[i]+expert_out[i] for i in range(len(sh_out))]
+
+
+
+class TransformerNP:
+
+    def __init__(self,cfg):
+
+        self.cfg=cfg; self.w=None; self.fc=FreqCache(cfg.head_dim,cfg.max_seq_len)
+
+        b=1; sl=cfg.max_seq_len; hd=cfg.head_dim; rhd=cfg.qk_rope_head_dim
+
+        nk=cfg.n_kv_heads; vhd=cfg.v_head_dim
+
+        if cfg.attn_type=='mla':
+
+            self.ck=zeros((b,sl,nk,hd-rhd)); self.cv=zeros((b,sl,nk,vhd))
+
+            self._ck_rope=zeros((b,sl,nk,rhd))
+
+        else:
+
+            self.ck=zeros((b,sl,nk,hd)); self.cv=zeros((b,sl,nk,hd))
+
+            self._ck_rope=None
+
+    def forward(self,tokens,sp=0):
+
+        w=self.w; cfg=self.cfg; d=cfg.dim; b=len(tokens); sl=len(tokens[0])
+
+        h=[[w['emb'][t] for t in row] for row in tokens]
+
+        for li in range(cfg.n_layers):
+
+            p=f'l{li}'; hn=_rnB(h,w[f'{p}an'])
+
+            for si in range(sl):
+
+                aw=[w[f'{p}qw'],w[f'{p}kw'],w.get(f'{p}vw'),w[f'{p}ow'],w.get(f'{p}wk'),w.get(f'{p}wu'),w.get(f'{p}wv')]
+
+                if cfg.attn_type=='mla':
+
+                    out=attn([aw[0],aw[1],aw[3],aw[4],aw[5],aw[6]],[hn[bi][si:si+1] for bi in range(b)],sp+si,self.fc,cfg,(self.ck,self.cv,self._ck_rope),'mla')
+
+                else:
+
+                    out=attn([aw[0],aw[1],aw[2],aw[3]],[hn[bi][si:si+1] for bi in range(b)],sp+si,self.fc,cfg,(self.ck,self.cv),'standard')
+
+                for bi in range(b): h[bi][si]=_add(h[bi][si], out[bi][0])
+
+            hn=_rnB(h,w[f'{p}fn'])
+
+            if li<cfg.n_dense:
+
+                h=[[_add(h[bi][si],_ffn(hn[bi][si],w[f'{p}w1'],w[f'{p}w2'])) for si in range(sl)] for bi in range(b)]
+
+            else:
+
+                h=[[_add(h[bi][si],moe_ffn(hn[bi][si],w,p,cfg)) for si in range(sl)] for bi in range(b)]
+
+        return _liB(_rnB(h,w['no']),w['hd'])
+
+
+
+def build_weights(cfg):
+
+    w={}; d=cfg.dim; g=random.gauss
+
+    w['emb']=[[g(0,0.02) for _ in range(d)] for _ in range(cfg.vocab_size)]
+
+    w['no']=[1.0]*d; w['hd']=[[g(0,0.02) for _ in range(d)] for _ in range(cfg.vocab_size)]
+
+    for i in range(cfg.n_layers):
+
+        p=f'l{i}'; hd=cfg.head_dim; n=cfg.n_heads; nk=cfg.n_kv_heads
+
+        w[f'{p}an']=[1.0]*d; w[f'{p}fn']=[1.0]*d
+
+        w[f'{p}qw']=[[g(0,0.02) for _ in range(d)] for _ in range(n*hd)]
+
+        w[f'{p}ow']=[[g(0,0.02) for _ in range(n*hd)] for _ in range(d)]
+
+        if cfg.attn_type=='mla':
+
+            lr=cfg.kv_lora_rank; rhd=cfg.qk_rope_head_dim; vhd=cfg.v_head_dim
+
+            w[f'{p}kw']=[[g(0,0.02) for _ in range(d)] for _ in range(lr+rhd)]
+
+            w[f'{p}wk']=[[g(0,0.02) for _ in range(lr)] for _ in range(nk*(hd-rhd))]
+
+            w[f'{p}wu']=[[g(0,0.02) for _ in range(lr)] for _ in range(nk*hd)]
+
+            w[f'{p}wv']=[[g(0,0.02) for _ in range(lr)] for _ in range(nk*vhd)]
+
+        else:
+
+            w[f'{p}kw']=[[g(0,0.02) for _ in range(d)] for _ in range(nk*hd)]
+
+            w[f'{p}vw']=[[g(0,0.02) for _ in range(d)] for _ in range(nk*hd)]
+
+        if i<cfg.n_dense:
+
+            hdim=d*4
+
+            w[f'{p}w1']=[[g(0,0.02) for _ in range(d)] for _ in range(hdim)]
+
+            w[f'{p}w2']=[[g(0,0.02) for _ in range(hdim)] for _ in range(d)]
+
+        else:
+
+            hdim=d*4
+
+            w[f'{p}rt']=[[g(0,0.02) for _ in range(d)] for _ in range(cfg.n_routed)]
+
+            w[f'{p}sh_g']=[[g(0,0.02) for _ in range(d)] for _ in range(hdim)]
+
+            w[f'{p}sh_u']=[[g(0,0.02) for _ in range(d)] for _ in range(hdim)]
+
+            w[f'{p}sh_d']=[[g(0,0.02) for _ in range(hdim)] for _ in range(d)]
+
+            for ei in range(cfg.n_routed):
+
+                ep=f'{p}.e{ei}'
+
+                w[f'{ep}.g']=[[g(0,0.02) for _ in range(d)] for _ in range(hdim)]
+
+                w[f'{ep}.u']=[[g(0,0.02) for _ in range(d)] for _ in range(hdim)]
+
+                w[f'{ep}.d']=[[g(0,0.02) for _ in range(hdim)] for _ in range(d)]
+
+    return w
+
+
+
+class 简芯守护:
+
+    def __init__(self,工作区=None):
+
+        self.根 = 工作区 or os.path.abspath(os.path.join(os.path.dirname(__file__),'..','..'))
+
+        self.数据目录=os.path.join(os.path.dirname(__file__),'中枢数据')
+
+        os.makedirs(self.数据目录,exist_ok=True)
+
+        模型路径=os.path.join(self.数据目录,'简芯权重.safetensors')
+
+        self.网络=简芯(ins=256,hid=[64,32],outs=16,lr=0.01)
+
+        if os.path.exists(模型路径):
+
+            try: self.网络.加载(模型路径); print('[简芯] 加载已有权重')
+
+            except: pass
+
+        self.已学文件={}; self.数据缓存=[]; self.总计数=0
+
+        self.运行中=True; self.插槽={}; self.插槽数量=16
+
+
+
+        try:
+
+            import sys
+
+            sys.path.insert(0, os.path.dirname(__file__))
+
+            from slot_组件 import 向量组件, 海马体组件, 蒸馏组件, 锚点组件, 图谱组件, 上下文组件
+
+            r = self.插入(向量组件())
+
+            if r.get('ok'): print('[简芯] 向量记忆组件已插入')
+
+            r = self.插入(海马体组件())
+
+            if r.get('ok'): print('[简芯] 海马体组件已插入')
+
+            r = self.插入(蒸馏组件())
+
+            if r.get('ok'): print('[简芯] 知识蒸馏组件已插入')
+
+            r = self.插入(锚点组件())
+
+            if r.get('ok'): print('[简芯] 锚点记忆组件已插入')
+
+            r = self.插入(图谱组件())
+
+            if r.get('ok'): print('[简芯] 知识图谱组件已插入')
+
+            r = self.插入(上下文组件())
+
+            if r.get('ok'): print('[简芯] 长上下文组件已插入')
+
+        except Exception as e:
+
+            print(f'[简芯] 组件插入失败: {e}')
+
+
+
+    def 插入(self,组件,槽位=None):
+
+
+
+        if 槽位 is None:
+
+            for i in range(1,self.插槽数量+1):
+
+                if i not in self.插槽: 槽位=i; break
+
+            if 槽位 is None: return {'ok':False,'原因':'所有插槽已满'}
+
+        if 槽位 in self.插槽: return {'ok':False,'原因':f'槽{槽位}已被占用'}
+
+        if not callable(组件.get('处理')): return {'ok':False,'原因':'组件缺少可调用的处理接口'}
+
+        self.插槽[槽位]=组件
+
+        print(f'[插槽] 槽{槽位} ← [{组件.get("名称",lambda:"?")()}]')
+
+        return {'ok':True,'槽位':槽位}
+
+
+
+    def 拔出(self,名称):
+
+
+
+        for 槽,组 in list(self.插槽.items()):
+
+            if 组.get('名称',lambda:None)()==名称:
+
+                del self.插槽[槽]
+
+                print(f'[插槽] 槽{槽} → [{名称}] 已拔出')
+
+                return {'ok':True,'槽位':槽}
+
+        return {'ok':False,'原因':f'未找到组件[{名称}]'}
+
+
+
+    def 插槽列表(self):
+
+
+
+        return {f'槽{i}':(self.插槽[i].get('名称',lambda:'?')() if i in self.插槽 else '空闲') for i in range(1,self.插槽数量+1)}
+
+
+
+    def 投喂(self,文本,来源='对话'):
+
+
+
+        if isinstance(文本,str) and len(文本.strip())>2:
+
+
+
+            for 槽,组 in self.插槽.items():
+
+                try:
+
+                    if callable(组.get('处理')): 组['处理'](文本)
+
+                except: pass
+
+
+
+            self.网络.投喂(文本,来源)
+
+            self.总计数+=1
+
+            if self.总计数%5==0: self.持久化()
+
+            return True
+
+        return False
+
+
+
+    def _分类(self,文件名):
+
+        if 文件名 in ('MEMORY.md','SOUL.md','USER.md','AGENTS.md','IDENTITY.md','TOOLS.md','HEARTBEAT.md'):
+
+            return '身份记忆'
+
+        if 文件名.startswith('task-summary_'):
+
+            return '任务记录'
+
+        if 'memory' in 文件名.lower() or 文件名.startswith('202'):
+
+            return '日常记忆'
+
+        return '其他记忆'
+
+
+
+    def 扫描记忆(self):
+
+
+
+        文件列表=[]
+
+        for 名 in ['MEMORY.md','SOUL.md','USER.md','AGENTS.md','IDENTITY.md','TOOLS.md','HEARTBEAT.md']:
+
+            p=os.path.join(self.根,名)
+
+            if os.path.exists(p): 文件列表.append((名,p))
+
+        for p in glob.glob(os.path.join(self.根,'memory','*.md')):
+
+            文件列表.append((os.path.basename(p),p))
+
+        texts=[]; sources=[]
+
+        for 名,路径 in 文件列表:
+
+            try:
+
+                mtime=os.path.getmtime(路径)
+
+                if 路径 not in self.已学文件 or mtime>self.已学文件[路径]:
+
+                    with open(路径,'r',encoding='utf-8') as f:
+
+                        content=f.read()
+
+                    for seg in [s.strip() for s in content.split('\n\n') if len(s.strip())>20]:
+
+                        texts.append(seg); sources.append(self._分类(名))
+
+                    self.已学文件[路径]=mtime
+
+            except: pass
+
+        if texts:
+
+            self.网络.批量训练(texts,sources,轮次=5)
+
+            self.总计数+=len(texts)
+
+            self.持久化()
+
+        return len(texts)
+
+
+
+    def 持久化(self):
+
+        try:
+
+            self.网络.保存(os.path.join(self.数据目录,'简芯权重.safetensors'))
+
+        except: pass
+
+
+
+    def 预测(self,文本):
+
+        return self.网络.预测(文本)
+
+
+
+    def 启动(self):
+
+
+
+        新=self.扫描记忆()
+
+        print(f'[简芯] 自学习启动, 扫描{新}条')
+
+        threading.Thread(target=self._学习循环,daemon=True).start()
+
+        threading.Thread(target=self._保存循环,daemon=True).start()
+
+        try:
+
+            while self.运行中: time.sleep(10)
+
+        except: self.运行中=False; self.持久化()
+
+
+
+    def _学习循环(self):
+
+        while self.运行中: self.扫描记忆(); time.sleep(300)
+
+
+
+    def _保存循环(self):
+
+        while self.运行中: time.sleep(600); self.持久化()
+
+
+
+if __name__=='__main__':
+
+    t0=time.time()
+
+    print('='*40)
+
+    print('简芯 v1.0 — 自学习评测')
+
+    print('='*40)
+
+
+
+    s=简芯守护()
+
+    print('\n[自学习] 扫描记忆文件...')
+
+    条数=s.扫描记忆()
+
+    print(f'  学习了 {条数} 条数据')
+
+
+
+    print('\n[验证] 投喂后预测:')
+
+    for t in ['中文是母语','帮我查股市','神经网络中枢','用户叫叶子']:
+
+        r=s.预测(t)
+
+        print(f'  "{t}" -> {r["来源"]} (置信{r["置信度"]})')
+
+
+
+    print('\n[Transformer] 标准+MLA注意力:')
+
+    cfg=ModelConfig(dim=32,n_layers=1,n_heads=2,n_kv_heads=1,vocab_size=64,max_seq_len=32); cfg.llm()
+
+    m=TransformerNP(cfg); m.w=build_weights(cfg)
+
+    o=m.forward([[random.randrange(0,64) for _ in range(4)]])
+
+    print(f'  标准注意力: {_sh(o)}')
+
+    cfg2=ModelConfig(dim=32,n_layers=2,n_heads=2,n_kv_heads=1,vocab_size=64,max_seq_len=32,
+
+        kv_lora_rank=4,qk_rope_head_dim=2,v_head_dim=4,n_dense=1,n_routed=4,n_act=2)
+
+    cfg2.deepseek()
+
+    m2=TransformerNP(cfg2); m2.w=build_weights(cfg2)
+
+    o2=m2.forward([[random.randrange(0,64) for _ in range(4)]])
+
+    print(f'  MLA+MoE:    {_sh(o2)}')
+
+    print(f'\n总耗时: {time.time()-t0:.2f}s')
+
+    print('简芯 v1.0 就绪 — 自学习已生效')
+
